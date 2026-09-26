@@ -3,6 +3,8 @@
 
 #include "GradProbe.h"
 
+namespace dolfin { class Probes; }
+
 namespace dolfin
 {
 
@@ -14,6 +16,10 @@ namespace dolfin
     GradProbes(const Array<double>& x, const FunctionSpace& V);
 
     GradProbes(const GradProbes& p);
+
+    // Probes at the points of located, for a space on the same mesh (no search)
+    GradProbes(const Probes& located, const FunctionSpace& V);
+    GradProbes(const GradProbes& located, const FunctionSpace& V);
 
     GradProbes() {};
 
@@ -71,6 +77,8 @@ namespace dolfin
     void set_probes_from_ids(const Array<double>& u);
 
   protected:
+
+    friend class Probes;
 
     std::vector<std::pair<std::size_t, GradProbe*> > _allprobes;
 

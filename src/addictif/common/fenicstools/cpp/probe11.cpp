@@ -45,10 +45,18 @@ PYBIND11_MODULE(probe11, m)
         });
 
     py::class_<Probes, std::shared_ptr<Probes>>(m, "Probes")
+        .def(py::init([](const Probes& located, const py::object v){
+            auto _v = v.attr("_cpp_object").cast<const FunctionSpace&>();
+            return std::make_shared<Probes>(located, _v);
+        }))
+        .def(py::init([](const GradProbes& located, const py::object v){
+            auto _v = v.attr("_cpp_object").cast<const FunctionSpace&>();
+            return std::make_shared<Probes>(located, _v);
+        }))
         .def(py::init([](const py::array_t<double> x, const py::object v){
             auto _v = v.attr("_cpp_object").cast<const FunctionSpace&>();
             const Array<double> _x(x.size(), const_cast<double*>(x.data()));
-            return Probes(_x, _v);
+            return std::make_shared<Probes>(_x, _v);
         }))
         .def("eval", [](Probes& self, py::object v){
             auto _v = v.attr("_cpp_object").cast<const Function&>();
@@ -112,10 +120,18 @@ PYBIND11_MODULE(probe11, m)
         });
 
     py::class_<GradProbes, std::shared_ptr<GradProbes>>(m, "GradProbes")
+        .def(py::init([](const Probes& located, const py::object v){
+            auto _v = v.attr("_cpp_object").cast<const FunctionSpace&>();
+            return std::make_shared<GradProbes>(located, _v);
+        }))
+        .def(py::init([](const GradProbes& located, const py::object v){
+            auto _v = v.attr("_cpp_object").cast<const FunctionSpace&>();
+            return std::make_shared<GradProbes>(located, _v);
+        }))
         .def(py::init([](const py::array_t<double> x, const py::object v){
             auto _v = v.attr("_cpp_object").cast<const FunctionSpace&>();
             const Array<double> _x(x.size(), const_cast<double*>(x.data()));
-            return GradProbes(_x, _v);
+            return std::make_shared<GradProbes>(_x, _v);
         }))
         .def("eval", [](GradProbes& self, py::object v){
             auto _v = v.attr("_cpp_object").cast<const Function&>();

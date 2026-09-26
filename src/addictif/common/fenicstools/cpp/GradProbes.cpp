@@ -1,36 +1,57 @@
 #include "GradProbes.h"
+#include "Probes.h"
+#include <dolfin/common/MPI.h>
 
 using namespace dolfin;
 
-GradProbes::GradProbes(const Array<double>& x, const FunctionSpace& V)
+GradProbes::GradProbes(const Array<double>& x, const FunctionSpace& V) :
+  total_number_probes(0), _num_evals(0)
 {
-  const std::size_t Nd = V.mesh()->geometry().dim();
-  const std::size_t N = x.size() / Nd;
-  Array<double> _x(Nd);
-  total_number_probes = N;
   _value_size = 1;
-  _num_evals = 0;
-  _num_grad_evals = 0;
   for (std::size_t i = 0; i < V.element()->value_rank(); i++)
     _value_size *= V.element()->value_dimension(i);
+  _num_grad_evals = 0;
+  _geom_dim = V.mesh()->geometry().dim();
+  add_positions(x, V);
+}
+//
+// Probes at the points of another collection, for a space on the same mesh
+template <class Located>
+static void same_points(const Located& from, const FunctionSpace& V,
+                        std::vector<std::pair<std::size_t, GradProbe*> >& to)
+{
+  bool other_mesh = false;
+  for (auto& p : from)
+    other_mesh = other_mesh || (p.second->mesh().id() != V.mesh()->id());
+  if (MPI::max(V.mesh()->mpi_comm(), (int) other_mesh))
+    dolfin_error("GradProbes.cpp", "reuse probe positions",
+                 "the function space is on another mesh than the probes");
+  to.reserve(from.size());
+  for (auto& p : from)
+    to.emplace_back(p.first, new GradProbe(p.second->coordinates().data(), V,
+                                          p.second->cell_index()));
+}
 
-  _geom_dim = Nd;
+GradProbes::GradProbes(const Probes& located, const FunctionSpace& V) :
+  total_number_probes(located.total_number_probes), _num_evals(0)
+{
+  _value_size = 1;
+  for (std::size_t i = 0; i < V.element()->value_rank(); i++)
+    _value_size *= V.element()->value_dimension(i);
+  _num_grad_evals = 0;
+  _geom_dim = V.mesh()->geometry().dim();
+  same_points(located._allprobes, V, _allprobes);
+}
 
-  for (std::size_t i=0; i<N; i++)
-  {
-    for (std::size_t j=0; j<Nd; j++)
-      _x[j] = x[i*Nd + j];
-    try
-    {
-      GradProbe* probe = new GradProbe(_x, V);
-      std::pair<std::size_t, GradProbe*> newprobe = std::make_pair(i, probe);
-      _allprobes.push_back(newprobe);
-    } 
-    catch (std::exception &e)
-    { // do-nothing
-    }
-  }
-  //cout << _allprobes.size() << " of " << N  << " probes found on processor " << MPI::process_number() << endl;
+GradProbes::GradProbes(const GradProbes& located, const FunctionSpace& V) :
+  total_number_probes(located.total_number_probes), _num_evals(0)
+{
+  _value_size = 1;
+  for (std::size_t i = 0; i < V.element()->value_rank(); i++)
+    _value_size *= V.element()->value_dimension(i);
+  _num_grad_evals = 0;
+  _geom_dim = V.mesh()->geometry().dim();
+  same_points(located._allprobes, V, _allprobes);
 }
 //
 GradProbes::GradProbes(const GradProbes& p)
@@ -58,28 +79,24 @@ GradProbes::~GradProbes()
 //
 void GradProbes::add_positions(const Array<double>& x, const FunctionSpace& V)
 {
-  const std::size_t gdim = V.mesh()->geometry().dim();
+  const Mesh& mesh = *V.mesh();
+  const std::size_t gdim = mesh.geometry().dim();
   const std::size_t N = x.size() / gdim;
-  Array<double> _x(gdim);
   const std::size_t old_N = total_number_probes;
-  const std::size_t old_local_size = local_size();  
   total_number_probes += N;
 
-  for (std::size_t i=0; i<N; i++)
+  // Build tree on all processes (collective), also those without points
+  auto tree = mesh.bounding_box_tree();
+
+  // Create probes only where found
+  const std::size_t not_found = std::numeric_limits<unsigned int>::max();
+  for (std::size_t i = 0; i < N; i++)
   {
-    for (std::size_t j=0; j<gdim; j++)
-      _x[j] = x[i*gdim + j];
-    try
-    {
-      GradProbe* probe = new GradProbe(_x, V);
-      std::pair<std::size_t, GradProbe*> newprobe = std::make_pair(old_N+i, &(*probe));
-      _allprobes.push_back(newprobe);
-    } 
-    catch (std::exception &e)
-    { // do-nothing
-    }
+    const double* xi = x.data() + i*gdim;
+    const std::size_t cell = tree->compute_first_entity_collision(Point(gdim, xi));
+    if (cell != not_found)
+      _allprobes.emplace_back(old_N + i, new GradProbe(xi, V, cell));
   }
-  //cout << local_size() - old_local_size << " of " << N  << " probes found on processor " << MPI::process_number() << endl;
 }
 //
 void GradProbes::eval(const Function& u)
