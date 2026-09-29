@@ -67,13 +67,31 @@ def main():
     uz_mean = u[direction].mean(axis=tuple(tdims))
     por_mean = phi.mean(axis=tuple(tdims))
 
+    # Mean and variance over the fluid in each cross-section, one plane at a time
+    fluid_mean = dict()
+    fluid_var = dict()
+    for species in conc:
+        fluid_mean[species] = np.zeros(len(x[direction]))
+        fluid_var[species] = np.zeros(len(x[direction]))
+        for k in range(len(x[direction])):
+            ind = [slice(None)] * 3
+            ind[direction] = k
+            ind = tuple(ind)
+            c_k = conc[species][ind][phi[ind] > 0.5].astype(np.float64)
+            if len(c_k):
+                fluid_mean[species][k] = c_k.mean()
+                fluid_var[species][k] = ((c_k - c_k.mean())**2).mean()
+
     if mpi_root:
         header = " ".join([index2axis[direction], 
                         "porosity", f"u_{index2axis[direction]}", *conc_mean.keys(), 
                         *[f"J_{key}_{index2axis[direction]}" for key in Jz_mean.keys()],
                         *[f"I_{key}" for key in Jz_mean.keys()],
-                        *[f"R_{key}" for key in Jz_mean.keys()]]) 
-        data = np.vstack([x[direction], por_mean, uz_mean, *conc_mean.values(), *Jz_mean.values(), *I_mean.values(), *Rz_mean.values()]).T
+                        *[f"R_{key}" for key in Jz_mean.keys()],
+                        *[f"mean_{key}_fluid" for key in fluid_mean.keys()],
+                        *[f"var_{key}_fluid" for key in fluid_var.keys()]]) 
+        data = np.vstack([x[direction], por_mean, uz_mean, *conc_mean.values(), *Jz_mean.values(), *I_mean.values(), *Rz_mean.values(),
+                          *fluid_mean.values(), *fluid_var.values()]).T
         #data = np.vstack([x[direction], por_mean, uz_mean, *conc_mean.values(), *Jz_mean.values(), *I_mean.values()]).T
         np.savetxt(os.path.join(analysisfolder, f"averages_{index2axis[direction]}.dat"), data, header=header)
 
