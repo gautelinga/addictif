@@ -1,7 +1,7 @@
 import argparse
 import numpy as np
 import dolfin as df
-from addictif.common.utils import mpi_print, Params, create_folder_safely
+from addictif.common.utils import mpi_print, Params, create_folder_safely, read_field
 import os
 
 def parse_args():
@@ -36,8 +36,7 @@ def main():
     delta_ = df.Function(S, name="delta")
 
     mpi_print("Loading delta")
-    with df.HDF5File(mesh.mpi_comm(), os.path.join(args.input, "delta.h5"), "r") as h5f:
-        h5f.read(delta_, "delta")
+    read_field(os.path.join(args.input, "delta.h5"), delta_, "delta")
 
     a_ = df.Function(S, name="a")
     b_ = df.Function(S, name="b") 

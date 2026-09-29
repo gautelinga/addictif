@@ -4,7 +4,7 @@ import h5py
 import os
 import numpy as np
 import argparse
-from addictif.common.utils import mpi_root, mpi_print, axis2index, index2axis, Params, mpi_max, mpi_min, helpers
+from addictif.common.utils import mpi_root, mpi_print, axis2index, index2axis, Params, mpi_max, mpi_min, helpers, read_field
 from addictif.common.fenicstools.Probes import Probes, GradProbes
 
 def parse_args():
@@ -155,12 +155,11 @@ def main():
         for species, reaction_rate in zip(specii, reaction_rates):
             reac_[species] = df.Function(S, name=reaction_rate)
         
-        with df.HDF5File(mesh.mpi_comm(), os.path.join(args.input, conc_key), "r") as h5f:
-            for species in specii:
-                h5f.read(conc_[species], species)
+        for species in specii:
+            read_field(os.path.join(args.input, conc_key), conc_[species], species)
 
-            for species, reaction_rate in zip(specii, reaction_rates):
-                h5f.read(reac_[species], reaction_rate)
+        for species, reaction_rate in zip(specii, reaction_rates):
+            read_field(os.path.join(args.input, conc_key), reac_[species], reaction_rate)
 
         """
         mpi_print("Interpolating gradients.")
