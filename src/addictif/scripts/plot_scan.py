@@ -19,7 +19,7 @@ def parse_args():
 def main():
     args = parse_args()
 
-    x, phi, u, conc, grad, prm = fetch_intp_data(args.input)
+    x, phi, u, conc, grad, rate, prm = fetch_intp_data(args.input)
 
     direction = prm["direction"]
     if args.direction is not None:

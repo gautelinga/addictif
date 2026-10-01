@@ -2,7 +2,7 @@ import dolfin as df
 import numpy as np
 from addictif.common.utils import (
     helpers, mpi_print, mpi_sum, mpi_rank, mpi_max, mpi_min, 
-    Top, Btm, axis2index, Params, create_folder_safely, compile_cpp_file)
+    Top, Btm, axis2index, index2axis, Params, create_folder_safely, compile_cpp_file)
 import os
 import h5py
 import argparse
@@ -17,6 +17,9 @@ def parse_args():
     parser.add_argument("--it", type=int, default=0, help="Iteration")
     parser.add_argument("--eps", type=float, default=0.01, help="Epsilon")
     parser.add_argument("--inlet_func", choices=["erf", "tanh"], type=str.lower, default="erf", help="Inlet function")
+    parser.add_argument("--angle", type=float, default=0.0,
+                        help="Angle (degrees) between the inlet interface and the plane x[1]=ymid, "
+                             "rotated in the inlet plane about its mid-point")
     #parser.add_argument("--refine", type=bool, default=True, help="Do you want refinement")
     parser.add_argument("-D", type=float, required=True, help="Diffusion coefficient")
     #parser.add_argument("--L", type=float, default=1, help="Pore size (to compute Peclet number)")
@@ -36,7 +39,11 @@ def main():
     eps = args.eps
     inlet_func = args.inlet_func
     # refine_tol = 0.2
-    output_folder = os.path.join(args.input, f"conservative_D{D}_eps{eps}", f"it{it}")
+    angle = args.angle
+    case_name = f"conservative_D{D}_eps{eps}"
+    if angle != 0.:
+        case_name += f"_angle{angle}"
+    output_folder = os.path.join(args.input, case_name, f"it{it}")
     create_folder_safely(output_folder)
 
     linear_solver = "bicgstab"
@@ -102,14 +109,31 @@ def main():
     ds = df.Measure("ds", domain=mesh, subdomain_data=subd)
     n = df.FacetNormal(mesh)
 
+    # Signed distance to the inlet interface. The interface passes through the mid-point
+    # of the inlet and is rotated by `angle` within the inlet plane away from x[1] = ymid,
+    # i.e. it follows x[1] - ymid = tan(angle) * (x[k] - kmid), where k is the in-plane axis
+    # normal to both the flow direction and x[1].
+    x_mid = 0.5 * (x_max + x_min)
+    if angle == 0.:
+        k = 1
+        dist_str = "(x[1]-ymid)"
+    else:
+        in_plane_axes = [i for i in range(mesh.geometry().dim()) if i not in (direction, 1)]
+        if len(in_plane_axes) != 1:
+            raise ValueError("--angle requires a 3D mesh with flow direction x or z.")
+        k = in_plane_axes[0]
+        dist_str = f"((x[1]-ymid)*cos(theta) - (x[{k}]-kmid)*sin(theta))"
+        mpi_print(f"Inlet interface inclined by {angle} degrees towards the {index2axis[k]} axis.")
+
     if inlet_func == "erf":
         mpi_print("Choosing erf as the inlet function.")
-        expr_str = "erf((x[1]-ymid)/(eps))"
+        expr_str = f"erf({dist_str}/(eps))"
     else:
         mpi_print("Choosing tanh as the inlet function.")
-        expr_str = "tanh((x[1]-ymid)/(sqrt(2)*eps))"
+        expr_str = f"tanh({dist_str}/(sqrt(2)*eps))"
 
-    delta_top_expr = df.Expression(expr_str, eps=eps, ymid=0.5*(x_max[1]+x_min[1]), degree=2)
+    delta_top_expr = df.Expression(expr_str, eps=eps, ymid=x_mid[1], kmid=x_mid[k],
+                                   theta=np.deg2rad(angle), degree=2)
     rho_top_expr = df.Expression("1.0", degree=2)
 
     delta_top = df.interpolate(delta_top_expr, S)
@@ -120,8 +144,8 @@ def main():
     df.LagrangeInterpolator.interpolate(u_proj_, u_)
     mpi_print("done.")
 
-    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "u_proj.xdmf")) as xdmff:
-        xdmff.write(u_proj_)
+    #with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "u_proj.xdmf")) as xdmff:
+        #xdmff.write(u_proj_)
 
     mpi_print("Interpolating norm")
     u_norm_ = df.interpolate(df.CompiledExpression(helpers.AbsVecCell(), u=u_proj_, degree=0), S_DG0)
@@ -192,10 +216,12 @@ def main():
     prm["tol"] = args.tol
     prm["D"] = args.D
     prm["eps"] = eps
+    prm["angle"] = angle
     prm["it"] = it
     prm["invert"] = args.invert
     prm.dump(paramsfile)
 
+    '''
     with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "conc_show.xdmf")) as xdmff:
         xdmff.parameters.update({"functions_share_mesh": True,
                                  "rewrite_function_mesh": False,
@@ -205,6 +231,7 @@ def main():
         xdmff.write(tau_, 0.)
         xdmff.write(u_norm_, 0.)
         xdmff.write(h_, 0.)
+    '''
 
     with df.HDF5File(mesh.mpi_comm(), os.path.join(output_folder, "delta.h5"), "w") as h5f:
         h5f.write(delta_, "delta")

@@ -12,33 +12,19 @@ c_ref = 1.0 #mol/L
 
 nspec = 6
 
-def compute_secondary_spec(c_, K_):
+def compute_secondary_spec_initial(c_, K_):
     c_[2] = c_[0] * c_[1]**-1 *K_[0]
     c_[3] = c_[0] * c_[1]**-2 * K_[1]
     c_[4] = c_[0]**-1 * c_[1]**2 *K_[2]
     c_[5] = c_[1]**-1 *K_[3]
 
-def compute_conserved_spec(c):
+def compute_conserved_spec_initial(c):
     u_ = np.zeros(2)
     u_[0] = c[0] + c[2] + c[3] - c[4]
     u_[1] = c[1] - c[2] - 2*c[3] + 2*c[4] - c[5]
     return u_
 
-def compute_poly(c0, u_, K_):
-    K1, K2, K3, K4 = K_
-    u1, u2 = u_
-
-    a = np.zeros(7)
-    a[6] = 4*K3 - 1 #4*K_[2] - 1
-    a[5] = 4*K1*K3 - K1 + 2*u1 + 2*u2 #2*(u_[0] + u_[1]) - K_[0] + 4*K_[0]*K_[2]
-    a[4] = K1**2*K3 + 3*K1*u1 + 2*K1*u2 - K2 + 2*K4 - 2*u1*u2 - u2**2 #-u_[1] * (2*u_[0] + u_[1]) + K_[0] * (3*u_[0] + 2*u_[1]) + 2*K_[3] - K_[1] + K_[0]**2*K_[2]
-    a[3] = 2*K1*K4 - 2*K1*u1**2 - 3*K1*u1*u2 - K1*u2**2 + 4*K2*u1 + 2*K2*u2 - 2*K4*u1 - 2*K4*u2 #-K_[0] * (u_[0]+u_[1])*(2*u_[0]+u_[1]) - 2*(2*u_[0]+u_[1]) * K_[3] + 2*K_[3]*K_[0] + 2*K_[1]*(2*u_[0]+u_[1])
-    a[2] = -3*K1*K4*u1 - 2*K1*K4*u2 + 2*K2*K4 - 4*K2*u1**2 - 4*K2*u1*u2 - K2*u2**2 - K4**2 #-K_[0] * K_[3] * (3*u_[0] + 2*u_[1]) - K_[3]**2 - K_[1] * (2*u_[0]+u_[1])**2 + 2*K_[1]*K_[3]
-    a[1] = -K1*K4**2 - 4*K2*K4*u1 - 2*K2*K4*u2 #- 2*K_[1]*K_[3]*(2*u_[0]+u_[1]) - K_[0]*K_[3]**2
-    a[0] = - K2*K4**2 #- K_[1]*K_[3]**2
-    return npol.polyval(c0, a)
-
-def compute_primary_spec(c_, u_, K_):
+def compute_primary_spec_initial(c_, u_, K_):
     K1, K2, K3, K4 = K_
     u1, u2 = u_
 
@@ -59,6 +45,50 @@ def compute_primary_spec(c_, u_, K_):
         if abs(c1.imag) < 1e-8 and c1.real > 0:
             c1 = c1.real  # concentration of h+
             c0 = (- c1**2 + c1 * (2*u_[0]+u_[1]) + K_[3])/(2*c1 + K_[0])  # concentration of co2
+            #print(c0)
+            if c0 > 0:
+                sols.append((c0, c1))
+
+    if not (len(sols) == 1 or (len(sols) == 2 and np.linalg.norm(np.array(sols[0])-np.array(sols[1])) < 1e-7) ):
+        #print(c1_)
+        #print(sols)
+        exit()
+    
+    c_[0] = sols[0][0]
+    c_[1] = sols[0][1]
+
+def compute_secondary_spec(c_, u_, K_):
+    c_[2] = c_[0] * c_[1]**-1 *K_[0]
+    c_[3] = c_[0] * c_[1]**-2 * K_[1]
+    c_[5] = c_[1]**-1 *K_[3]
+    c_[4] = u_[2] #ca2+
+
+def compute_conserved_spec(c):
+    u_ = np.zeros(3)
+    u_[0] = c[0] + c[2] + c[3]
+    u_[1] = c[1] - c[2] - 2*c[3] - c[5]
+    u_[2] = c[4]
+    return u_
+
+def compute_primary_spec(c_, u_, K_):
+    K1, K2, K3, K4 = K_
+    u1, u2, u3 = u_
+
+    a = np.zeros(5)
+    a[4] = -1 #-u_[1] * (2*u_[0] + u_[1]) + K_[0] * (3*u_[0] + 2*u_[1]) + 2*K_[3] - K_[1] + K_[0]**2*K_[2]
+    a[3] = u2 - K1 #-K_[0] * (u_[0]+u_[1])*(2*u_[0]+u_[1]) - 2*(2*u_[0]+u_[1]) * K_[3] + 2*K_[3]*K_[0] + 2*K_[1]*(2*u_[0]+u_[1])
+    a[2] = K4 - K2 + K1*u1 + K1*u2 #-K_[0] * K_[3] * (3*u_[0] + 2*u_[1]) - K_[3]**2 - K_[1] * (2*u_[0]+u_[1])**2 + 2*K_[1]*K_[3]
+    a[1] = K1*K4 + 2*K2*u1 + K2*u2 #- 2*K_[1]*K_[3]*(2*u_[0]+u_[1]) - K_[0]*K_[3]**2
+    a[0] = K2*K4 #- K_[1]*K_[3]**2
+
+    c1_ = npol.polyroots(a)
+    
+    sols = []
+    for c1 in c1_:
+        #print("c1=", c1)
+        if abs(c1.imag) < 1e-8 and c1.real > 0:
+            c1 = c1.real  # concentration of h+
+            c0 = (c1**2*u1)/(c1**2+c1*K1+K2)  # concentration of co2
             #print(c0)
             if c0 > 0:
                 sols.append((c0, c1))
@@ -94,6 +124,17 @@ def equilibrium_constants(c_ref):
     #K_ = np.array([K_1, K_2, K_3, K_4])
     return K_
 
+def saturation_product_calcite():
+    K_sp = 10**-8.48
+    return K_sp
+
+def rate_constants(): #mol/m2/s
+    k1 = 0.89
+    k2 = 5.01*10**-4
+    k3 = 6.6*10**-7
+    k = np.array([k1, k2, k3])
+    return k
+
 if __name__ == "__main__":
     ## Testing
 
@@ -107,7 +148,7 @@ if __name__ == "__main__":
     c_a = np.zeros(nspec)
     c_b = np.zeros(nspec)
 
-    c_ref = 1
+    c_ref = 1 #mol/L
     #c_ref = 1
     
     K_ = equilibrium_constants(c_ref)
@@ -138,26 +179,12 @@ if __name__ == "__main__":
 
     #print("gamma_", gamma_coeff_a_)
 
-    compute_secondary_spec(c_a, Ks_a_)
-    compute_secondary_spec(c_b, Ks_b_)
+    compute_secondary_spec_initial(c_a, Ks_a_)
+    compute_secondary_spec_initial(c_b, Ks_b_)
     u_a = compute_conserved_spec(c_a)
     #print(u_a)
     u_b = compute_conserved_spec(c_b)
-    out_a = compute_poly(c_a[1], u_a, Ks_a_)
-    out_b = compute_poly(c_b[1], u_b, Ks_b_)
-    print(out_a, out_b)  #should be close to zero
-    #assert(abs(out_a) < 1e-2)
-    #assert(abs(out_b) < 1e-2)
-
-    ## Consistency check
-    print("c_a=", c_a)
-    c_a_out = np.zeros(nspec)
-    compute_primary_spec(c_a_out, u_a, Ks_a_)
-    compute_secondary_spec(c_a_out, Ks_a_)
-    print(c_a, c_a_out)
-
-    #assert(np.linalg.norm(c_a[:2] - c_a_out[:2]) < 1e-7)
-
+    
     nx = 1000
     eta = np.linspace(-5, 5, nx)
     alpha = 0.5 * ( 1 - erf(eta/2))
@@ -172,7 +199,8 @@ if __name__ == "__main__":
         gamma_coeff_ = get_gamma_coeff(Is_[i], z_, aom_)
         K_new = K_ * gamma_coeff_
         compute_primary_spec(c_[i, :], u_[i, :], K_new)
-        compute_secondary_spec(c_[i, :], K_new)
+        compute_secondary_spec(c_[i, :], u_[i, :], K_new)
+    
 
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(1, 6)
@@ -195,33 +223,14 @@ if __name__ == "__main__":
     ax[5].set_title("OH^-")
     #plt.semilogy()
 
-    dcdalpha = np.diff(c_[:, 4])/np.diff(alpha)
-    alpham = 0.5*(alpha[1:]+alpha[:-1])
-    d2cdalpha2 = np.diff(dcdalpha)/np.diff(alpham)
-
-    dalphadeta = np.diff(alpha)/np.diff(eta)
-    dalphadetam = 0.5*(dalphadeta[1:] + dalphadeta[:-1])
+    sat_rat = c_ref * c_[:, 4] * c_ref * c_[:, 3] / saturation_product_calcite()
+    k = rate_constants()
+    rea_rate = -(k[0]*c_[:,1] + k[1]*c_[:,0] +k[2])*(1-sat_rat)
 
     fig, ax = plt.subplots(1, 2)
-    ax[0].plot(alpha[1:], c_ref * dcdalpha )
-    ax[1].plot(alpha[2:], c_ref * d2cdalpha2 * dalphadetam**2 )
+    ax[0].plot(alpha, sat_rat)
+    ax[0].set_title("Saturation ratio")
+    ax[1].plot(alpha, rea_rate)
+    ax[1].set_title("Reaction rate (mol/m2/s)")
 
-    plt.figure()
-    plt.plot(alpha, c_ref * c_[:, 0])
-
-    plt.figure()
-    plt.plot(alpha, -np.log10(c_ref * c_[:, 1]))
-
-    plt.figure()
-    plt.plot(alpha, c_ref * c_[:, 2])
-
-    plt.figure()
-    plt.plot(alpha, c_ref * c_[:, 3])
-
-    plt.figure()
-    plt.plot(alpha, c_ref * c_[:, 4])
-
-    plt.figure()
-    plt.plot(alpha[2:], c_ref * d2cdalpha2 * dalphadetam**2)
-
-    plt.show()
+    plt.show() 

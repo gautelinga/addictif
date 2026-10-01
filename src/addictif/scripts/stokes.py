@@ -106,7 +106,7 @@ def main():
     # Create Krylov solver and AMG preconditioner
     solver = df.KrylovSolver("minres", "hypre_amg")
     solver.parameters["monitor_convergence"] = True
-    solver.parameters["relative_tolerance"] = 1e-12
+    solver.parameters["relative_tolerance"] = 1e-10
     solver.parameters["maximum_iterations"] = 100000
 
     # Associate operator (A) and preconditioner matrix (P)
@@ -127,6 +127,7 @@ def main():
     u_, p_ = U.split(deepcopy=True)
 
     ui_mean = abs(df.assemble(u_[direction] * df.dx))/vol
+    mpi_print(f"Mean velocity in {args.direction} direction: {ui_mean}")
     u_.vector()[:] /= ui_mean
 
     # Dump parameters

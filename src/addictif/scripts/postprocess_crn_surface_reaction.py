@@ -1,7 +1,7 @@
 import argparse
 import dolfin as df
 import numpy as np
-from addictif.common.utils import mpi_root, Params, create_folder_safely, helpers, xdmf_params, mpi_print, mpi_root, axis2index
+from addictif.common.utils import mpi_root, Params, create_folder_safely, helpers, xdmf_params, mpi_print, Top, Btm, Boundary, SideWalls, mpi_max, mpi_min, Slice, axis2index
 #from chemistry.react_1.reaction import equilibrium_constants, compute_secondary_spec, compute_primary_spec, compute_conserved_spec, nspec, c_ref
 import importlib
 from importlib.resources import files
@@ -14,9 +14,8 @@ import os
 def parse_args():
     parser = argparse.ArgumentParser(description="Post process complex reaction network")
     parser.add_argument("-i", "--input", required=True, type=str, help="Folder with concentration file (required)")
-    parser.add_argument("--crn", type=str, default="react1", help="Reaction")
+    parser.add_argument("--crn", type=str, default="react3", help="Reaction")
     parser.add_argument("--sols", type=str, default="default", help="End-member solutions")
-    parser.add_argument("--swap", action="store_true", help="Swap end members")
     return parser.parse_args()
 
 def load_sols(crn, sols):
@@ -48,8 +47,8 @@ def main():
 
     K_ = crn.equilibrium_constants(crn.c_ref)
 
-    crn.compute_secondary_spec(c_a, K_)
-    crn.compute_secondary_spec(c_b, K_)
+    crn.compute_secondary_spec_initial(c_a, K_)
+    crn.compute_secondary_spec_initial(c_b, K_)
     u_a = crn.compute_conserved_spec(c_a)
     u_b = crn.compute_conserved_spec(c_b)
 
@@ -64,11 +63,12 @@ def main():
     c_ = np.zeros((len(alpha), crn.nspec))
     for i in range(len(alpha)):
         crn.compute_primary_spec(c_[i, :], u_[i, :], K_)
-        crn.compute_secondary_spec(c_[i, :], K_)
+        crn.compute_secondary_spec(c_[i, :], u_[i, :], K_)
 
     c_intp = [None for _ in range(crn.nspec)]
     for ispec in range(crn.nspec):
         c_intp[ispec] = intp.InterpolatedUnivariateSpline(alpha, c_[:, ispec])
+
 
     if False and mpi_root:
         fig, ax = plt.subplots(1, 6, figsize=(15,3))
@@ -120,9 +120,6 @@ def main():
         h5f.read(alpha_, "delta")
 
     # Translate from delta (-1, 1) to alpha (0, 1)
-    if args.swap:
-        alpha_.vector()[:] *= -1
-
     alpha_.vector()[:] = 0.5*(alpha_.vector()[:]+1)
     # Clip for physical reasons
     #alph = alpha_.vector()[:]
@@ -130,12 +127,10 @@ def main():
     #alpha_.vector()[alph > 1] = 1.0
     # Leads to unphysical gradients!
 
-    logalpha_ = df.Function(S, name="logalpha")
-    logalpha_.vector()[:] = alpha_.vector()[:]  # np.log(alpha_.vector()[:])
+    #logalpha_ = df.Function(S, name="logalpha")
+    #logalpha_.vector()[:] = alpha_.vector()[:]  # np.log(alpha_.vector()[:])
 
     output_folder = os.path.join(args.input, f"crn_{args.crn}_{args.sols}")
-    if args.swap:
-        output_folder += "_swapped"
     create_folder_safely(output_folder)
 
     c_spec_ = [df.Function(S, name=f"c_{ispec}") for ispec in range(crn.nspec)]
@@ -145,25 +140,95 @@ def main():
     pH = df.Function(S, name="pH")
     pH.vector()[:] = -np.log10(c_spec_[1].vector()[:])
 
-    if False:
-        solver_type = "gmres"
-        params = dict(
-            relative_tolerance=1e-9
-        )
+    saturation_ratio = df.Function(S, name="saturation_ratio")
+    saturation_ratio.vector()[:] = c_spec_[4].vector()[:] * c_spec_[3].vector()[:] * crn.c_ref**2 / crn.saturation_product_calcite()
+    reaction_rate = df.Function(S, name="reaction_rate")
+    k = crn.rate_constants()
+    reaction_rate.vector()[:] = -(k[0]*c_spec_[1].vector()[:] + k[1]*c_spec_[0].vector()[:] +k[2])*(1-saturation_ratio.vector()[:])
 
-        dlogalphadx_ = df.project(logalpha_.dx(0), S, solver_type=solver_type, form_compiler_parameters=params)
-        dlogalphady_ = df.project(logalpha_.dx(1), S, solver_type=solver_type, form_compiler_parameters=params)
-        dlogalphadz_ = df.project(logalpha_.dx(2), S, solver_type=solver_type, form_compiler_parameters=params)
+    c_spec_cm = [df.Function(S, name=f"c_{ispec}_cm") for ispec in range(crn.nspec)]
+    pH_cm = df.Function(S, name="pH_cm")
+    saturation_ratio_cm = df.Function(S, name="saturation_ratio_cm")
+    reaction_rate_cm = df.Function(S, name="reaction_rate_cm")
 
-        gradalpha2_ = df.Function(S, name="sqGradAlpha")
-        gradalpha2_.vector()[:] = dlogalphadx_.vector()[:]**2 + dlogalphady_.vector()[:]**2 + dlogalphadz_.vector()[:]**2
-    else:
-        absgrad_alpha = df.interpolate(df.CompiledExpression(helpers.AbsGrad(), a=alpha_, degree=0), S_DG0)
+    for ispec in range(crn.nspec):
+        c_spec_cm[ispec].vector()[:] = (c_a[ispec]*(1-alpha_.vector()[:]) + c_b[ispec]*alpha_.vector()[:])* crn.c_ref
+    pH_cm.vector()[:] = -np.log10(c_spec_cm[1].vector()[:])
+    saturation_ratio_cm.vector()[:] = c_spec_cm[4].vector()[:] * c_spec_cm[3].vector()[:] * crn.c_ref**2 / crn.saturation_product_calcite()
+    reaction_rate_cm.vector()[:] = -(k[0]*c_spec_cm[1].vector()[:] + k[1]*c_spec_cm[0].vector()[:] +k[2])*(1-saturation_ratio_cm.vector()[:])
+    
+    subd = df.MeshFunction("size_t", mesh, mesh.topology().dim() - 1)
+    subd.rename("subd", "subd")
+    subd.set_all(0)
+                
+    grains = Boundary()
+    grains.mark(subd, 1)
 
-        gradalpha2_ = df.Function(S_DG0, name="sqGradAlpha")
-        gradalpha2_.vector()[:] = absgrad_alpha.vector()[:]**2
+    sidewall_dims = [0, 1, 2]
+    x = mesh.coordinates()[:]
 
-        alpha_DG0_ = df.interpolate(df.CompiledExpression(helpers.ScalarDG0(), a=alpha_, degree=0), S_DG0)
+    x_min = mpi_min(x)
+    x_max = mpi_max(x)
+    L = x_max - x_min
+    Ns = 20
+    dslice = L[2] / Ns
+    tol = df.DOLFIN_EPS_LARGE
+    xs = np.linspace(x_min[2], x_max[2], Ns, endpoint=False)+0.5*dslice
+
+    sidewalls = [SideWalls(x_min, x_max, dim, tol) for dim in sidewall_dims]
+    x_min[2] += 1.1/30.0
+    x_max[2] -= 1.1/30.0
+    sidewalls.append(SideWalls(x_min, x_max, 2, tol))
+
+    [sw.mark(subd, 0) for index, sw in enumerate(sidewalls)]
+    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "subd.xdmf")) as xdmff:
+        xdmff.write(subd)
+
+    ds = df.Measure("ds", domain=mesh, subdomain_data=subd)
+    total_reaction_rate = df.assemble(reaction_rate * ds(1))
+    total_reaction_rate_cm = df.assemble(reaction_rate_cm * ds(1))
+
+    for i in range(Ns):
+        x_slice = xs[i]
+        slice= Slice(2, x_slice - 0.5*dslice, x_slice + 0.5*dslice, tol)
+        slice.mark(subd, i+2)
+
+    x_min = mpi_min(x)
+    x_max = mpi_max(x)
+
+    sidewalls = [SideWalls(x_min, x_max, dim, tol) for dim in sidewall_dims]
+    x_min[2] += 1.1/30.0
+    x_max[2] -= 1.1/30.0
+    sidewalls.append(SideWalls(x_min, x_max, 2, tol))
+
+    [sw.mark(subd, 0) for index, sw in enumerate(sidewalls)]
+
+    ds = df.Measure("ds", domain=mesh, subdomain_data=subd)
+
+    reac_integrated = np.zeros(Ns)
+    reac_integrated_cm = np.zeros(Ns)
+    area = np.zeros(Ns)
+
+    for i in range(Ns):
+        area[i] = df.assemble(df.Constant(1.0) * ds(i+2))
+        reac_integrated[i] = df.assemble(reaction_rate * ds(i+2))
+        reac_integrated_cm[i] = df.assemble(reaction_rate_cm * ds(i+2))
+
+
+    if mpi_root:
+        header = " ".join(["z","area", "reaction_rate_integrated", "reaction_rate_integrated_cm"])
+        data = np.vstack([xs, area, reac_integrated, reac_integrated_cm]).T
+        np.savetxt(os.path.join(output_folder, "reaction_rate_per_slice.dat"), data, header=header)
+
+    
+
+    
+
+    
+    
+
+
+    
 
     #R_spec_ = [df.Function(S_DG0, name=f"R_{ispec}") for ispec in range(crn.nspec)]
     #for ispec in range(crn.nspec):
@@ -171,38 +236,7 @@ def main():
         #R_spec_[ispec].vector()[:] = D * d2c_intp(alpha_DG0_.vector()[:]) * gradalpha2_.vector()[:] * crn.c_ref
 
     #only calculate precipitation rate for Ca^2+ (spec 4), non-dimensionalized by c_ref/(L^2/D) and L is the size of the domain
-    R_spec_ = df.Function(S_DG0, name=f"R_4")
-    d2c_intp = c_intp[4].derivative(2)
-    R_spec_.vector()[:] = d2c_intp(alpha_DG0_.vector()[:]) * gradalpha2_.vector()[:]
-
-    total_reaction_rate = df.assemble(R_spec_ * df.dx)
-
-    #from ca2+ transport equation
-    u_path = os.path.relpath(os.path.join(args.input, prm["u"]), os.getcwd())
-    prm_u = Params(os.path.join(u_path, "params.dat"), required=True)
-    mesh_u_path = os.path.join(u_path, prm_u["mesh"])
     
-    mesh_u = df.Mesh()
-    with df.HDF5File(mesh_u.mpi_comm(), mesh_u_path, "r") as h5f:
-        h5f.read(mesh_u, "mesh", False)
-    
-    V_u = df.VectorFunctionSpace(mesh_u, "Lagrange", 2)
-    u_vel = df.Function(V_u)
-    
-    with df.HDF5File(mesh_u.mpi_comm(), os.path.join(u_path, "u.h5"), "r") as h5f:
-        h5f.read(u_vel, "u")
-
-    V = df.VectorFunctionSpace(mesh, "Lagrange", 1)
-    mpi_print("interpolating velocity field...")
-    u_proj_ = df.Function(V, name="u")
-    df.LagrangeInterpolator.interpolate(u_proj_, u_vel)
-    mpi_print("done.")
-    n = df.FacetNormal(mesh)
-    net_ca_transport = (df.assemble(df.dot(u_proj_, df.grad(c_spec_[4])) * df.dx)
-                            - D * df.assemble(df.dot(n, df.grad(c_spec_[4])) * df.ds)) / D
-
-    mpi_print(f"Total reaction rate: {total_reaction_rate}")
-    mpi_print(f"Net Ca transport: {net_ca_transport}")
 
     # Output
     mpi_print("Saving CRN.")
@@ -211,36 +245,58 @@ def main():
     prm["reaction_rates"] = "R_4"
     #prm["reaction_rates"] = ",".join([f"R_{ispec}" for ispec in range(crn.nspec)])
     prm["ade"] = os.path.relpath(args.input, output_folder)
-    prm["Total reaction rate"] = total_reaction_rate
-    prm["Net Ca transport"] = net_ca_transport
     prm.dump(os.path.join(output_folder, "params.dat"))
 
-    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "alpha_show.xdmf")) as xdmff:
+    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "saturation_ratio.xdmf")) as xdmff:
         xdmff.parameters.update(xdmf_params)
         #xdmff.write(gradalpha2_, 0.)
         #xdmff.write(pH, 0.)
-        xdmff.write(alpha_, 0.)
+        xdmff.write(saturation_ratio, 0.)
         #for ispec in range(crn.nspec):
             #xdmff.write(R_spec_[ispec], 0.)
             #xdmff.write(c_spec_[ispec], 0.)
 
-    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "c_spec_show.xdmf")) as xdmff:
+    #with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "c_spec_show.xdmf")) as xdmff:
+     #   xdmff.parameters.update(xdmf_params)
+        #xdmff.write(gradalpha2_, 0.)
+      #  xdmff.write(pH, 0.)
+       # for ispec in range(crn.nspec):
+            #xdmff.write(R_spec_[ispec], 0.)
+        #    xdmff.write(c_spec_[ispec], 0.)
+
+    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "R_show.xdmf")) as xdmff:
+        xdmff.parameters.update(xdmf_params)
+        xdmff.write(reaction_rate, 0.)
+
+   # with df.HDF5File(mesh.mpi_comm(), os.path.join(output_folder, "c_spec.h5"), "w") as h5f:
+        #for ispec in range(crn.nspec):
+            #h5f.write(c_spec_[ispec], f"c_{ispec}")
+            #h5f.write(R_spec_[ispec], f"R_{ispec}")
+    #    h5f.write(reaction_rate, f"R_4")
+     #   h5f.write(saturation_ratio, f"saturation_ratio")
+
+    mpi_print(f"Total reaction rate: {total_reaction_rate}")
+
+    
+
+    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "saturation_ratio_cm.xdmf")) as xdmff:
         xdmff.parameters.update(xdmf_params)
         #xdmff.write(gradalpha2_, 0.)
-        xdmff.write(pH, 0.)
-        for ispec in range(crn.nspec):
+        #xdmff.write(pH, 0.)
+        xdmff.write(saturation_ratio_cm, 0.)
+        #for ispec in range(crn.nspec):
             #xdmff.write(R_spec_[ispec], 0.)
-            xdmff.write(c_spec_[ispec], 0.)
+            #xdmff.write(c_spec_[ispec], 0.)
 
-    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "R_4_show.xdmf")) as xdmff:
+    
+
+    with df.XDMFFile(mesh.mpi_comm(), os.path.join(output_folder, "R_show_cm.xdmf")) as xdmff:
         xdmff.parameters.update(xdmf_params)
-        xdmff.write(R_spec_, 0.)
+        xdmff.write(reaction_rate_cm, 0.)
 
-    with df.HDF5File(mesh.mpi_comm(), os.path.join(output_folder, "c_spec.h5"), "w") as h5f:
-        for ispec in range(crn.nspec):
-            h5f.write(c_spec_[ispec], f"c_{ispec}")
-            #h5f.write(R_spec_[ispec], f"R_{ispec}")
-        h5f.write(R_spec_, f"R_4")
+
+    mpi_print(f"Total reaction rate_cm: {total_reaction_rate_cm}")
+
 
 if __name__ == "__main__":
     main()

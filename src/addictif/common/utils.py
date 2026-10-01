@@ -61,6 +61,30 @@ def fetch_intp_data(input):
     u = []
     conc = dict()
     grad = dict()
+    rate = dict()
+    with h5py.File(input, "r") as h5f:
+        phi = h5f["phi"][:]
+        for axis in index2axis:
+            x.append(h5f[axis][:])
+            u.append(h5f[f"u{axis}"][:])
+
+        for key in h5f:
+            grp = h5f[key]
+            if isinstance(grp, h5py.Group):
+                conc[key] = grp["conc"][:]
+                rate[key] = grp["rate"][:]
+                grad[key] = []
+                for axis in index2axis:
+                    grad[key].append(grp[f"grad{axis}"][:])
+
+        prm = dict([(key, h5f.attrs[key]) for key in h5f.attrs])
+    return x, phi, u, conc, grad, rate, prm
+
+def fetch_intp_data2(input):
+    x = []
+    u = []
+    conc = dict()
+    grad = dict()
     with h5py.File(input, "r") as h5f:
         phi = h5f["phi"][:]
         for axis in index2axis:
@@ -171,3 +195,14 @@ class SideWallsX(GenSubDomain):
     def inside(self, x, on_boundary): 
         return on_boundary and bool(
             x[0] < self.x_min[0] + self.tol or x[0] > self.x_max[0] - self.tol)
+    
+class Slice(df.SubDomain):
+    def __init__(self, direction, left, right, tol):
+        self.direction = direction
+        self.left = left
+        self.right = right
+        self.tol = tol
+        super().__init__()
+
+    def inside(self, x, on_boundary):
+        return self.left - self.tol < x[self.direction] < self.right + self.tol

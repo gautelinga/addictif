@@ -200,6 +200,58 @@ public:
   std::shared_ptr<dolfin::Function> a;
 };
 
+class Flux : public dolfin::Expression
+{
+public:
+
+  // Create expression with 1 component
+  Flux() : dolfin::Expression() {}
+
+  // Function for evaluating expression on each cell
+  void eval(Eigen::Ref<Eigen::VectorXd> values, Eigen::Ref<const Eigen::VectorXd> x, const ufc::cell& ufc_cell) const override
+  {
+    const uint cell_index = ufc_cell.index;
+    const dolfin::Cell dolfin_cell(*a->function_space()->mesh(), cell_index);
+    //dolfin_cell.get_cell_data(ufc_cell);
+    const dolfin::FiniteElement element = *a->function_space()->element();
+    const dolfin::FiniteElement element_n = *n->function_space()->element();
+
+
+    std::vector<double> coordinate_dofs;
+    dolfin_cell.get_coordinate_dofs(coordinate_dofs);
+
+    std::vector<double> n_coefficients(element_n.space_dimension());
+    n->restrict(n_coefficients.data(), element_n, dolfin_cell,
+                coordinate_dofs.data(), ufc_cell);
+    double nx = n_coefficients[0];
+    double ny = n_coefficients[1];
+    double nz = n_coefficients[2];
+
+    // const size_t dim = 3; // a->function_space()->mesh()->geometry().dim();
+    const size_t ncoeff = 4;
+ 
+    std::vector<double> coefficients_(ncoeff);
+
+    a->restrict(coefficients_.data(), element, dolfin_cell,
+                coordinate_dofs.data(), ufc_cell);
+
+    std::vector<double> Nx_(ncoeff);
+    std::vector<double> Ny_(ncoeff);
+    std::vector<double> Nz_(ncoeff);
+
+    Tet tet(dolfin_cell);
+    tet.linearderiv(Nx_, Ny_, Nz_);
+
+    double dadx = std::inner_product(Nx_.begin(), Nx_.end(), coefficients_.begin(), 0.0);
+    double dady = std::inner_product(Ny_.begin(), Ny_.end(), coefficients_.begin(), 0.0);
+    double dadz = std::inner_product(Nz_.begin(), Nz_.end(), coefficients_.begin(), 0.0);
+
+    values[0] = -(nx*dadx + ny*dady + nz*dadz);
+  }
+  std::shared_ptr<dolfin::Function> n;
+  std::shared_ptr<dolfin::Function> a;
+};
+
 class CellSize : public dolfin::Expression
 {
 public:
@@ -288,6 +340,11 @@ PYBIND11_MODULE(SIGNATURE, m)
     (m, "Grad")
     .def(py::init<>())
     .def_readwrite("a", &Grad::a);
+  py::class_<Flux, std::shared_ptr<Flux>, dolfin::Expression>
+    (m, "Flux")
+    .def(py::init<>())
+    .def_readwrite("n", &Flux::n)
+    .def_readwrite("a", &Flux::a);
   py::class_<ScalarDG0, std::shared_ptr<ScalarDG0>, dolfin::Expression>
     (m, "ScalarDG0")
     .def(py::init<>())

@@ -3,7 +3,7 @@
 '''
 import numpy as np
 import argparse
-from addictif.common.utils import fetch_intp_data, index2axis, axis2index, create_folder_safely, mpi_root, mpi_size, mpi_print
+from addictif.common.utils import fetch_intp_data2, index2axis, axis2index, create_folder_safely, mpi_root, mpi_size, mpi_print
 import os
 
 def parse_args():
@@ -21,7 +21,7 @@ def main():
         mpi_print("MPI is not yet supported for compute_averages. Please run in serial.")
         exit()
 
-    x, phi, u, conc, grad, rate, prm = fetch_intp_data(args.input)
+    x, phi, u, conc, grad, prm = fetch_intp_data2(args.input)
     
 
     direction = prm["direction"]
@@ -45,14 +45,12 @@ def main():
     tdims.remove(direction)
 
     conc_mean = dict()
-    rate_mean = dict()
     Jz_mean = dict()
     I_mean = dict()
     Rz_mean = dict()
     Ixy_mean = dict()
     for species in conc:
         conc_mean[species] = conc[species].mean(axis=tuple(tdims))  # mean value for each cross section perpendicular to the flow direction
-        rate_mean[species] = rate[species].mean(axis=tuple(tdims))
         Jz = flip * conc[species] * u[direction] - D * grad[species][direction]
         Jz_mean[species] = Jz.mean(axis=tuple(tdims))
         I = D * np.sum([grad[species][dim]**2 for dim in range(3)], axis=0) #sum over 3 dims
@@ -74,8 +72,8 @@ def main():
                         "porosity", f"u_{index2axis[direction]}", *conc_mean.keys(), 
                         *[f"J_{key}_{index2axis[direction]}" for key in Jz_mean.keys()],
                         *[f"I_{key}" for key in Jz_mean.keys()],
-                        *[f"R_{key}" for key in Jz_mean.keys()], *rate_mean.keys()]) 
-        data = np.vstack([x[direction], por_mean, uz_mean, *conc_mean.values(), *Jz_mean.values(), *I_mean.values(), *Rz_mean.values(), *rate_mean.values()]).T
+                        *[f"R_{key}" for key in Jz_mean.keys()]]) 
+        data = np.vstack([x[direction], por_mean, uz_mean, *conc_mean.values(), *Jz_mean.values(), *I_mean.values(), *Rz_mean.values()]).T
         #data = np.vstack([x[direction], por_mean, uz_mean, *conc_mean.values(), *Jz_mean.values(), *I_mean.values()]).T
         np.savetxt(os.path.join(analysisfolder, f"averages_{index2axis[direction]}.dat"), data, header=header)
 

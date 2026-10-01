@@ -23,7 +23,9 @@ setup(name = "addictif",
           "h5py",
           "matplotlib",
           "mpi4py",
-          "numpy"
+          "numpy",
+          "scipy",
+          "cppimport"
       ],
       entry_points = {"console_scripts": ["addictif=addictif.run_addictif:main"]},
       include_package_data=True,
