@@ -56,6 +56,56 @@ def create_folder_safely(dirname):
     if mpi_root and not os.path.exists(dirname):
         os.makedirs(dirname)
 
+def fetch_rows(path, dataset, wanted, comm):
+    """Entries `wanted` of a 1D dataset. Each rank reads one block, then they trade:
+    no rank holds the whole, and no h5py point selection (~1000x slower)."""
+    size, rank = comm.Get_size(), comm.Get_rank()
+    with h5py.File(path, "r") as h5:
+        n = h5[dataset].shape[0]
+        edges = np.array([n * r // size for r in range(size + 1)], dtype=np.int64)
+        block = h5[dataset][edges[rank]:edges[rank + 1]]
+    wanted = np.asarray(wanted, dtype=np.int64)
+    owner = np.searchsorted(edges, wanted, side="right") - 1
+    order = np.argsort(owner, kind="stable")
+    counts = np.bincount(owner, minlength=size).astype(np.int64)
+    recv = np.empty(size, dtype=np.int64)
+    comm.Alltoall(counts, recv)
+    asked = np.empty(recv.sum(), dtype=np.int64)
+    comm.Alltoallv([wanted[order], counts.tolist()], [asked, recv.tolist()])
+    back = np.empty(len(wanted), dtype=block.dtype)
+    comm.Alltoallv([np.ascontiguousarray(block[asked - edges[rank]]), recv.tolist()],
+                   [back, counts.tolist()])
+    out = np.empty_like(back)
+    out[order] = back
+    return out
+
+def read_field(path, f, name):
+    """Read field `name` in `path` into the P1 function `f`.
+
+    Either dolfin's layout, or one value per mesh vertex in the mesh file's
+    vertex order (`<name>/vertex_values`), as stokes-beadpack stores delta.
+    """
+    mesh = f.function_space().mesh()
+    with h5py.File(path, "r") as h5:
+        by_vertex = "vertex_values" in h5[name]
+        sizes = (h5[name].attrs.get("n_vertices"), h5[name].attrs.get("n_cells"))
+    if not by_vertex:
+        with df.HDF5File(mesh.mpi_comm(), path, "r") as h5f:
+            h5f.read(f, name)
+        return f
+    if sizes != (mesh.num_entities_global(0), mesh.num_entities_global(3)):
+        raise ValueError("{} holds {} on {} vertices and {} cells; the mesh has {} and {}".format(
+            path, name, *sizes, mesh.num_entities_global(0), mesh.num_entities_global(3)))
+    gvi = np.asarray(mesh.topology().global_indices(0), dtype=np.int64)
+    values = fetch_rows(path, name + "/vertex_values", gvi, mesh.mpi_comm())
+    v2d = df.vertex_to_dof_map(f.function_space())
+    x = f.vector().get_local()
+    owned = (v2d >= 0) & (v2d < len(x))  # ghost vertices map past the local range
+    x[v2d[owned]] = values[owned]
+    f.vector().set_local(x)
+    f.vector().apply("insert")
+    return f
+
 def fetch_intp_data(input):
     x = []
     u = []

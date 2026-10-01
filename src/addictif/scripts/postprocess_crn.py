@@ -1,7 +1,7 @@
 import argparse
 import dolfin as df
 import numpy as np
-from addictif.common.utils import mpi_root, Params, create_folder_safely, helpers, xdmf_params, mpi_print, mpi_root, axis2index
+from addictif.common.utils import mpi_root, Params, create_folder_safely, helpers, xdmf_params, mpi_print, mpi_root, read_field, axis2index
 #from chemistry.react_1.reaction import equilibrium_constants, compute_secondary_spec, compute_primary_spec, compute_conserved_spec, nspec, c_ref
 import importlib
 from importlib.resources import files
@@ -116,8 +116,7 @@ def main():
     S_DG0 = df.FunctionSpace(mesh, "DG", 0)
     alpha_ = df.Function(S, name="alpha")
 
-    with df.HDF5File(mesh.mpi_comm(), os.path.join(args.input, "delta.h5"), "r") as h5f:
-        h5f.read(alpha_, "delta")
+    read_field(os.path.join(args.input, "delta.h5"), alpha_, "delta")
 
     # Translate from delta (-1, 1) to alpha (0, 1)
     if args.swap:

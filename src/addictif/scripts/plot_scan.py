@@ -14,6 +14,8 @@ def parse_args():
     parser.add_argument("-i", "--input", type=str, required=True, help="Path to interpolated data (e.g. intpdata.h5)")
     parser.add_argument("--arrows", action="store_true", help="Plot arrows")
     parser.add_argument("--direction", type=str, default=None, help="Override direction (x, y or z)")
+    parser.add_argument("--vmin", type=float, default=None, help="Lower end of the colour range (default: the data's minimum)")
+    parser.add_argument("--vmax", type=float, default=None, help="Upper end of the colour range (default: the data's maximum)")
     return parser.parse_args()
 
 def main():
@@ -40,11 +42,18 @@ def main():
     
     X, Y = np.meshgrid(x[tdims[0]], x[tdims[1]], indexing='ij')
 
+    # Colour range from --vmin/--vmax, else the data; extend the colorbar where the fluid exceeds it
     vmin = dict()
     vmax = dict()
+    extend = dict()
     for species in conc:
-        vmin[species] = conc[species].min()
-        vmax[species] = conc[species].max()
+        vmin[species] = conc[species].min() if args.vmin is None else args.vmin
+        vmax[species] = conc[species].max() if args.vmax is None else args.vmax
+        fluid = conc[species][np.logical_not(ma)]
+        below = fluid.size > 0 and fluid.min() < vmin[species]
+        above = fluid.size > 0 and fluid.max() > vmax[species]
+        extend[species] = {(False, False): "neither", (True, False): "min",
+                           (False, True): "max", (True, True): "both"}[(below, above)]
 
     zvals = list(enumerate(x[direction]))
     for iz, z in zvals[mpi_rank::mpi_size]:
@@ -68,7 +77,7 @@ def main():
             plt.yticks(fontsize=16)
             plt.xticks(fontsize=16)
             ax.tick_params(labelsize=16)
-            cbar = plt.colorbar(pcm, ax=ax, shrink=0.8) #, label=f"Concentration of ${species}$") # 
+            cbar = plt.colorbar(pcm, ax=ax, shrink=0.8, extend=extend[species]) #, label=f"Concentration of ${species}$") # 
             cbar.ax.tick_params(labelsize=16) 
             cbar.ax.set_ylabel(f"${species}$", rotation=90, labelpad=20, fontsize=16)
 

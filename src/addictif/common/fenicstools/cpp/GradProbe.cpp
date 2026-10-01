@@ -7,7 +7,19 @@ GradProbe::~GradProbe()
   clear(); 
 }
 
+// Find the local cell that contains x
+static std::size_t locate(const double* x, const Mesh& mesh)
+{
+  const Point point(mesh.geometry().dim(), x);
+  return mesh.bounding_box_tree()->compute_first_entity_collision(point);
+}
+
 GradProbe::GradProbe(const Array<double>& x, const FunctionSpace& V) :
+  GradProbe(x.data(), V, locate(x.data(), *V.mesh()))
+{
+}
+
+GradProbe::GradProbe(const double* x, const FunctionSpace& V, std::size_t cell_id) :
   _element(V.element()), _num_evals(0), _num_grad_evals(0), _geom_dim(0)
 {
   auto mesh = V.mesh();
@@ -15,71 +27,62 @@ GradProbe::GradProbe(const Array<double>& x, const FunctionSpace& V) :
   _geom_dim = gdim;
   _x.resize(3);
 
-  // Find the cell that contains probe
-  const Point point(gdim, x.data());
-  unsigned int cell_id = mesh->bounding_box_tree()->compute_first_entity_collision(point);
-
-  // If the cell is on this process, then create an instance 
-  // of the GradProbe class. Otherwise raise a dolfin_error.
-  if (cell_id != std::numeric_limits<unsigned int>::max())
-  {
-    // Store position of probe
-    for (std::size_t i = 0; i < 3; i++) 
-      _x[i] = (i < gdim ? x[i] : 0.0);
-
-    // Compute in tensor (one for scalar function, . . .)
-    _value_size_loc = 1;
-    for (std::size_t i = 0; i < _element->value_rank(); i++)
-       _value_size_loc *= _element->value_dimension(i);
-
-    _probes.resize(_value_size_loc);
-    _probes_grad.resize(_value_size_loc * _geom_dim);
-
-    // Create cell that contains point
-    dolfin_cell.reset(new Cell(*mesh, cell_id));
-    dolfin_cell->get_cell_data(ufc_cell);
-    
-    coefficients.resize(_element->space_dimension());
-    
-    // Cell vertices
-    dolfin_cell->get_vertex_coordinates(vertex_coordinates);
-        
-    // Create work vector for basis
-    basis_matrix.resize(_value_size_loc);
-    for (std::size_t i = 0; i < _value_size_loc; ++i)
-      basis_matrix[i].resize(_element->space_dimension());
-        
-    std::vector<double> basis(_value_size_loc);
-    const int cell_orientation = 0;
-    for (std::size_t i = 0; i < _element->space_dimension(); ++i)
-    {
-      _element->evaluate_basis(i, &basis[0], &x[0],
-                               vertex_coordinates.data(),
-                               cell_orientation);
-      for (std::size_t j = 0; j < _value_size_loc; ++j)
-        basis_matrix[j][i] = basis[j];
-    }
-
-    basis_grad_matrix.resize(_value_size_loc * _geom_dim);
-    for (std::size_t i=0; i < _value_size_loc * _geom_dim; ++i){
-      basis_grad_matrix[i].resize(_element->space_dimension());
-    }
-
-    std::vector<double> basis_grad(_value_size_loc * _geom_dim);
-    
-    for (std::size_t i=0; i < _element->space_dimension(); ++i){
-      _element->evaluate_basis_derivatives(i, 1,
-                                          &basis_grad[0], &x[0],
-                                          vertex_coordinates.data(),
-                                          cell_orientation);
-      for (std::size_t j = 0; j < _value_size_loc * _geom_dim; ++j){
-        basis_grad_matrix[j][i] = basis_grad[j];
-      }
-    }
-  }  
-  else
-  {  
+  // Raise an error if the probe is not on this process
+  if (cell_id == std::numeric_limits<unsigned int>::max())
     dolfin_error("GradProbe.cpp","set probe","GradProbe is not found on processor");
+
+  // Store position of probe
+  for (std::size_t i = 0; i < 3; i++) 
+    _x[i] = (i < gdim ? x[i] : 0.0);
+
+  // Compute in tensor (one for scalar function, . . .)
+  _value_size_loc = 1;
+  for (std::size_t i = 0; i < _element->value_rank(); i++)
+     _value_size_loc *= _element->value_dimension(i);
+
+  _probes.resize(_value_size_loc);
+  _probes_grad.resize(_value_size_loc * _geom_dim);
+
+  // Create cell that contains point
+  dolfin_cell.reset(new Cell(*mesh, cell_id));
+  dolfin_cell->get_cell_data(ufc_cell);
+  
+  coefficients.resize(_element->space_dimension());
+  
+  // Cell vertices
+  dolfin_cell->get_vertex_coordinates(vertex_coordinates);
+      
+  // Create work vector for basis
+  basis_matrix.resize(_value_size_loc);
+  for (std::size_t i = 0; i < _value_size_loc; ++i)
+    basis_matrix[i].resize(_element->space_dimension());
+      
+  std::vector<double> basis(_value_size_loc);
+  const int cell_orientation = 0;
+  for (std::size_t i = 0; i < _element->space_dimension(); ++i)
+  {
+    _element->evaluate_basis(i, &basis[0], x,
+                             vertex_coordinates.data(),
+                             cell_orientation);
+    for (std::size_t j = 0; j < _value_size_loc; ++j)
+      basis_matrix[j][i] = basis[j];
+  }
+
+  basis_grad_matrix.resize(_value_size_loc * _geom_dim);
+  for (std::size_t i=0; i < _value_size_loc * _geom_dim; ++i){
+    basis_grad_matrix[i].resize(_element->space_dimension());
+  }
+
+  std::vector<double> basis_grad(_value_size_loc * _geom_dim);
+  
+  for (std::size_t i=0; i < _element->space_dimension(); ++i){
+    _element->evaluate_basis_derivatives(i, 1,
+                                        &basis_grad[0], x,
+                                        vertex_coordinates.data(),
+                                        cell_orientation);
+    for (std::size_t j = 0; j < _value_size_loc * _geom_dim; ++j){
+      basis_grad_matrix[j][i] = basis_grad[j];
+    }
   }
 }
 //

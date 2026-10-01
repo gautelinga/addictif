@@ -17,7 +17,14 @@ namespace dolfin
 
     Probe(const Array<double>& x, const FunctionSpace& V);
 
+    // Create probe in a known local cell (no search)
+    Probe(const double* x, const FunctionSpace& V, std::size_t cell_id);
+
     Probe(const Probe& p);
+
+    // Return local cell and mesh of probe
+    std::size_t cell_index() const {return dolfin_cell->index();};
+    const Mesh& mesh() const {return dolfin_cell->mesh();};
 
     virtual ~Probe();
 
